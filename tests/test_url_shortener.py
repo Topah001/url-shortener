@@ -1,8 +1,11 @@
 import json
+import http.client
+import threading
 import unittest
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from url_shortener import ShortenerStore, validate_url
+from url_shortener import ShortenerStore, make_handler, validate_url
 
 
 class UrlValidationTests(unittest.TestCase):
@@ -33,6 +36,25 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(reopened.count(), 1)
         self.assertIsNone(reopened.get("bad/id"))
         self.assertEqual(json.loads(self.database.read_text(encoding="utf-8"))[short_id], "https://example.com/a")
+
+    def test_http_short_link_returns_a_real_redirect(self):
+        store = ShortenerStore(self.database)
+        short_id = store.add("https://example.com/destination")
+        server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(store, "http://127.0.0.1"))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            connection.request("GET", f"/{short_id}")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 302)
+            self.assertEqual(response.getheader("Location"), "https://example.com/destination")
+            response.read()
+            connection.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
 
 
 if __name__ == "__main__":
